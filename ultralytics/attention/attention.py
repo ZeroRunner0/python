@@ -55,18 +55,18 @@ class SpatialAttention(nn.Module):
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        print(f"size of x: {x.size()} type:{x.type()}")
+        # print(f"size of x: {x.size()} type:{x.type()}")
 
         # 1*h*w
         avg_out = torch.mean(x, dim=1, keepdim=True)
-        print(f"max_pool: {avg_out.size()} type:{avg_out.type()}")
+        # print(f"max_pool: {avg_out.size()} type:{avg_out.type()}")
         max_out, _ = torch.max(x, dim=1, keepdim=True)
-        print(f"max_out: {max_out.size()} type:{max_out.type()}")
+        # print(f"max_out: {max_out.size()} type:{max_out.type()}")
         x = torch.cat([avg_out, max_out], dim=1)
-        print(f"x1: {x.size()} type:{x.type()}")
+        # print(f"x1: {x.size()} type:{x.type()}")
         # 2*h*w
         x = self.conv(x)
-        print(f"x2: {x.size()} type:{x.type()}")
+        # print(f"x2: {x.size()} type:{x.type()}")
         # 1*h*w
         return self.sigmoid(x)
 
@@ -89,19 +89,19 @@ class ChannelAttention(nn.Module):
         avg_out = self.relu(avg_out)
         avg_out = self.l2(avg_out)
 
-        print(f"ChannelAttention avg_out: {avg_out.size()} type:{avg_out.type()}")
+        # print(f"ChannelAttention avg_out: {avg_out.size()} type:{avg_out.type()}")
 
         max_out = self.max_pool(x).view(b, c)
         max_out = self.l1(max_out)
         max_out = self.relu(max_out)
         max_out = self.l2(max_out)
 
-        print(f"ChannelAttention max_out: {max_out.size()} type:{max_out.type()}")
+        # print(f"ChannelAttention max_out: {max_out.size()} type:{max_out.type()}")
 
         out = self.sigmoid(avg_out + max_out)
         out = out.view(b, c, 1, 1)
 
-        print(f"ChannelAttention out: {out.size()} type:{out.type()}")
+        # print(f"ChannelAttention out: {out.size()} type:{out.type()}")
         return out.expand_as(x)
 
 
@@ -113,11 +113,33 @@ class CBAM(nn.Module):
 
     def forward(self, x):
         out = self.channel_attention(x) * x
-        print(f"CBAM out1:{out.size()} type:{out.type()}")
+        # print(f"CBAM out1:{out.size()} type:{out.type()}")
         out = self.spatial_attention(out) * out
-        print(f"CBAM out2:{out.size()} type:{out.type()}")
+        # print(f"CBAM out2:{out.size()} type:{out.type()}")
         return out
 
 
+"""
+ECA注意力机制
+"""
 
 
+class ECA(nn.Module):
+    def __init__(self, c1, c2, k_size=3):
+        super(ECA, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=k_size, padding=(k_size-1)//2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        out = self.avg_pool(x)
+        out = out.squeeze(-1)
+        # 理解成矩阵转置，变成行向量
+        out = out.transpose(-1, -2)
+        out = self.conv(out)
+        out = out.transpose(-1, -2)
+        out = out.unsqueeze(-1)
+        out = self.sigmoid(out)
+        out = out.expand_as(x)
+
+        return out * x
