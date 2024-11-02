@@ -143,3 +143,58 @@ class ECA(nn.Module):
         out = out.expand_as(x)
 
         return out * x
+
+
+"""
+CA注意力机制
+"""
+
+
+class CA(nn.Module):
+    def __init__(self, c1, c2, ratio=3):
+        super(CA, self).__init__()
+        self.h_avg_pool = nn.AdaptiveAvgPool2d((1, None))
+        self.w_avg_pool = nn.AdaptiveAvgPool2d((None, 1))
+        self.conv_11 = nn.Conv2d(c1, c1//ratio, kernel_size=1, stride=1, bias=False)
+        self.f_h = nn.Conv2d(c1//ratio, c1, kernel_size=1, stride=1, bias=False)
+        self.f_w = nn.Conv2d(c1//ratio, c1, kernel_size=1, stride=1, bias=False)
+
+        self.bn = nn.BatchNorm2d(c1//ratio)
+        self.relu = nn.ReLU()
+        self.sigmoid_h = nn.Sigmoid()
+        self.sigmoid_w = nn.Sigmoid()
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+
+        # h方向avg_pool: b*c*1*w
+        h_avg = self.h_avg_pool(x)
+
+        # w方向avg_pool: b*c*h*1
+        w_avg = self.w_avg_pool(x)
+        # 维度交换: b*c*h*1->b*c*1*h
+        w_avg = w_avg.permute(0, 1, 3, 2)
+
+        # 拼接 & 通道压缩
+        avg_out = torch.cat([h_avg, w_avg], dim=3)
+        avg_out = self.conv_11(avg_out)
+
+        # BN & relu
+        avg_out = self.relu(self.bn(avg_out))
+
+        # split
+        h_split, w_split = torch.split(avg_out, [w, h], dim=3)
+
+        # 维度交换: b*c*1*h->b*c*h*1
+        w_split = w_split.permute(0, 1, 3, 2)
+
+        # 通道数还原 & sigmoid
+        w_out = self.sigmoid_w(self.f_w(w_split))
+        h_out = self.sigmoid_h(self.f_h(h_split))
+
+        return x * h_out * w_out
+
+
+
+
+
