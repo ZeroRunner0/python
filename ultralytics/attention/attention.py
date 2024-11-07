@@ -195,6 +195,38 @@ class CA(nn.Module):
         return x * h_out * w_out
 
 
+class SimAM(nn.Module):
+    def __init__(self, c1, c2):
+        super(SimAM, self).__init__()
+        self.lamdba = 0.0001
+        self.sigmoid = nn.Sigmoid()
 
+    def forward(self, X):
+        # spatial size
+        n = X.shape[2] * X.shape[3] - 1
 
+        """
+        要添加keepdim=True, 
+        不添加的话，结果的维度会变成2维的，和原来的4维不对应
+        例如：原来b*c*h*w ---> b*c
+        """
+        # square of (t - u)
+        x_mean = X.mean(dim=[2, 3], keepdim=True)
+        d = (X - x_mean)
+        d = d.pow(2)
+
+        """
+        要添加keepdim=True, 
+        不添加的话，结果的维度会变成2维的，和原来的4维不对应
+        例如：原来b*c*h*w ---> b*c
+        """
+        # d.sum() / n is channel variance
+        v = d.sum(dim=[2, 3], keepdim=True)
+        v = v / n
+
+        # E_inv groups all importance of X
+        E_inv = d / (4 * (v + self.lamdba)) + 0.5
+
+        # return attended features
+        return X * self.sigmoid(E_inv)
 
