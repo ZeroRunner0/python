@@ -195,6 +195,11 @@ class CA(nn.Module):
         return x * h_out * w_out
 
 
+"""
+SimAM注意力机制
+"""
+
+
 class SimAM(nn.Module):
     def __init__(self, c1, c2):
         super(SimAM, self).__init__()
@@ -229,4 +234,99 @@ class SimAM(nn.Module):
 
         # return attended features
         return X * self.sigmoid(E_inv)
+
+
+"""
+Split Attention机制
+"""
+
+
+class rSoftMax(nn.Module):
+    def __init__(self, radix, cardinality):
+        super().__init__()
+        self.radix = radix
+        self.cardinality = cardinality
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        batch = x.size(0)
+        if self.radix > 1:
+            x = x.view(batch, self.cardinality, self.radix, -1).transpose(1, 2)
+            x = self.softmax(x)
+            x = x.reshape(batch, -1)
+        else:
+            x = torch.sigmoid(x)
+        return x
+
+
+class SplitAtt(nn.Module):
+    def __init__(self, in_channel, out_channel, radix=2, groups=1, kernel_size=(3, 3),
+                 reduction_factor=4, padding=(1, 1)):
+        super(SplitAtt, self).__init__()
+
+        inter_channels = max(in_channel * radix // reduction_factor, 32)
+        self.radix = radix
+        self.cardinality = groups
+        self.out_channel = out_channel
+        self.conv = nn.Conv2d(in_channel, out_channel*radix, kernel_size=kernel_size, 
+                              stride=1, padding=padding, groups=groups*radix, bias=False)
+        self.bn_chn_radix = nn.BatchNorm2d(out_channel*radix)
+        self.bn_chn_inter = nn.BatchNorm2d(inter_channels)
+        self.relu = nn.ReLU(inplace=True)
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.fc_chn_radix = nn.Conv2d(inter_channels, out_channel*radix, 1, groups=self.cardinality)
+        self.fc_chn_inter = nn.Conv2d(out_channel, inter_channels, 1, groups=self.cardinality)
+        self.rsoftmax = rSoftMax(radix, groups)
+
+        # print(f"in_chn: {in_channel},"
+        #       f"out_chn: {out_channel},"
+        #       f"inter_channels: {inter_channels}"
+        #       )
+
+    def forward(self, x):
+
+        # print(f"x size:{x.size()}")
+
+        x_tmp = self.conv(x)
+
+        # print(f"x_tmp size: {x_tmp.size()}")
+
+        x_tmp = self.bn_chn_radix(x_tmp)
+        x_tmp = self.relu(x_tmp)
+
+        batch, rchannel = x_tmp.shape[:2]
+        splited = torch.split(x_tmp, int(rchannel//self.radix), dim=1)
+
+        # print(f"splited num: {len(splited)}, splited size: {splited[0].shape}")
+
+        gap = sum(splited)
+
+        gap = self.avg_pool(gap)
+
+        # print(f"gap size: {gap.size()}")
+
+        gap = self.fc_chn_inter(gap)
+
+        # print(f"gap size: {gap.size()}")
+
+        # gap = self.bn_chn_inter(gap)
+        gap = self.relu(gap)
+
+        atten = self.fc_chn_radix(gap)
+
+        # print(f"atten size: {atten.size()}")
+
+        atten = self.rsoftmax(atten).view(batch, -1, 1, 1)
+
+        # print(f"atten size: {atten.size()}")
+
+        attens = torch.split(atten, rchannel//self.radix, dim=1)
+
+        # print(f"attens num: {len(attens)}, attens size: {attens[0].shape}")
+
+        out = sum([att*split for (att, split) in zip(attens, splited)])
+
+        # print(f"out size: {out.size()}")
+
+        return out.contiguous()
 
