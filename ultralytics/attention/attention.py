@@ -243,7 +243,7 @@ Split Attention机制
 
 class rSoftMax(nn.Module):
     def __init__(self, radix, cardinality):
-        super().__init__()
+        super(rSoftMax, self).__init__()
         self.radix = radix
         self.cardinality = cardinality
         self.softmax = nn.Softmax(dim=1)
@@ -329,4 +329,105 @@ class SplitAtt(nn.Module):
         # print(f"out size: {out.size()}")
 
         return out.contiguous()
+
+
+"""
+S2-MLPv2机制
+"""
+
+
+class S2_MLPv2_SplitAtt(nn.Module):
+    def __init__(self, channel, k=3):
+        super(S2_MLPv2_SplitAtt, self).__init__()
+        self.channel = channel
+        self.k = k
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.gelu = nn.GELU()
+        self.mlp1 = nn.Linear(channel, channel, bias=False)
+        self.mlp2 = nn.Linear(channel, channel*k, bias=False)
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x_all):
+        b, k, h, w, c = x_all.shape
+        x_all = x_all.reshape(b, k, -1, c)
+        a = torch.sum(x_all, 1)
+        a = torch.sum(a, 1)
+
+        hat_a = self.mlp1(a)
+        hat_a = self.gelu(hat_a)
+        hat_a = self.mlp2(hat_a)
+        hat_a = hat_a.reshape(b, self.k, c)
+        bar_a = self.softmax(hat_a)
+        attention = bar_a.unsqueeze(-2)
+        out = attention * x_all
+        out = torch.sum(out, 1).reshape(b, h, w, c)
+        return out
+
+
+def spatial_shift1(x):
+    b, w, h, c = x.size()
+    # x_tmp = x.clone()
+
+    # h方向右移
+    x[:, :, 1:, 0:c//4] = x[:, :, :h - 1, 0:c//4]
+    # print(x[:, :, :, 0:c//4])
+    # h方向左移
+    x[:, :, :h - 1, c//4:c//2] = x[:, :, 1:, c//4:c//2]
+    # print(x[:, :, :, c//4:c//2])
+    # w方向右移
+    x[:, 1:, :, c//2:c*3//4] = x[:, :w - 1, :, c//2:c*3//4]
+    # print(x[:, :, :, c//2:c*3//4])
+    # w方向左移
+    x[:, :w - 1, :, c*3//4:c] = x[:, 1:, :, c*3//4:c]
+    # print(x[:, :, :, c*3//4:c])
+
+    return x
+
+
+def spatial_shift2(x):
+    b, w, h, c = x.size()
+    # x_tmp = x.clone()
+
+    # w方向右移
+    x[:, 1:, :, 0:c//4] = x[:, :w - 1, :, 0:c//4]
+    # print(x[:, :, :, 0:c//4])
+    # w方向左移
+    x[:, :w - 1, :, c//4:c//2] = x[:, 1:, :, c//4:c//2]
+    # print(x[:, :, :, c//4:c//2])
+    # h方向右移
+    x[:, :, 1:, c//2:c*3//4] = x[:, :, :h - 1, c//2:c*3//4]
+    # print(x[:, :, :, c//2:c*3//4])
+    # h方向左移
+    x[:, :, :h - 1, c*3//4:c] = x[:, :, 1:, c*3//4:c]
+    # print(x[:, :, :, c*3//4:c])
+
+    return x
+
+
+class S2_MLPv2(nn.Module):
+    def __init__(self, channel, out_channel):
+        super(S2_MLPv2, self).__init__()
+        self.SplitAtt = S2_MLPv2_SplitAtt(channel)
+        self.shift1 = spatial_shift1
+        self.shift2 = spatial_shift2
+        self.mlp1 = nn.Linear(channel, channel * 3)
+        self.mlp2 = nn.Linear(channel, channel)
+
+    def forward(self, x):
+        b, c, h, w = x.size()
+        x = x.permute(0, 2, 3, 1)
+        x = self.mlp1(x)
+        x1 = self.shift1(x[:, :, :, 0:c])
+        x2 = self.shift2(x[:, :, :, c:c*2])
+        x3 = x[:, :, :, c*2:c*3]
+
+        x_cat = torch.stack((x1, x2, x3), dim=1)
+        out = self.SplitAtt(x_cat)
+        x = self.mlp2(out)
+        x = x.permute(0, 3, 1, 2)
+        return x
+
+
+
+
 
