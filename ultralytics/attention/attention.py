@@ -436,10 +436,8 @@ Criss-Cross Attention机制
 def INF(B, H, W):
     return -torch.diag(torch.tensor(float("inf")).repeat(H), 0).unsqueeze(0).repeat(B * W, 1, 1)
 
-
 class CrissCrossAttention(nn.Module):
     """ Criss-Cross Attention Module"""
-
     def __init__(self, in_dim, out_dim):
         super(CrissCrossAttention, self).__init__()
         self.query_conv = nn.Conv2d(in_channels=in_dim, out_channels=in_dim // 8, kernel_size=1)
@@ -456,11 +454,9 @@ class CrissCrossAttention(nn.Module):
         # B*C*H*W->B*W*C*H->BW*C*H->BW*H*C
         proj_query_H = proj_query.permute(0, 3, 1, 2).contiguous().view(m_batchsize * width, -1, height).permute(0, 2,
                                                                                                                  1)
-
         # B*C*H*W->B*H*C*W->BH*C*W->BH*W*C
         proj_query_W = proj_query.permute(0, 2, 1, 3).contiguous().view(m_batchsize * height, -1, width).permute(0, 2,
                                                                                                                  1)
-
         proj_key = self.key_conv(x)
 
         # B*C*H*W->B*W*C*H->BW*C*H
@@ -468,23 +464,12 @@ class CrissCrossAttention(nn.Module):
 
         # B*C*H*W->B*H*C*W->BH*C*W
         proj_key_W = proj_key.permute(0, 2, 1, 3).contiguous().view(m_batchsize * height, -1, width)
-
         proj_value = self.value_conv(x)
-
         # B*C*H*W->B*W*C*H->BW*C*H
         proj_value_H = proj_value.permute(0, 3, 1, 2).contiguous().view(m_batchsize * width, -1, height)
 
         # B*C*H*W->B*H*C*W->BH*C*W
         proj_value_W = proj_value.permute(0, 2, 1, 3).contiguous().view(m_batchsize * height, -1, width)
-
-        # print(f"proj_query_H:{proj_query_H.device}")
-        # print(f"proj_query_W:{proj_query_W.device}")
-        #
-        # print(f"proj_key_H:{proj_key_H.device}")
-        # print(f"proj_key_W:{proj_key_W.device}")
-        #
-        # print(f"proj_value_H:{proj_value_H.device}")
-        # print(f"proj_value_W:{proj_value_W.device}")
 
         INF_TMP = self.INF(m_batchsize, height, width)
         # print(f"x:{x.device}")
@@ -502,6 +487,12 @@ class CrissCrossAttention(nn.Module):
 
         att_H = concate[:, :, :, 0:height].permute(0, 2, 1, 3).contiguous().view(m_batchsize * width, height, height)
         att_W = concate[:, :, :, height:height + width].contiguous().view(m_batchsize * height, width, width)
+
+        # att张量中元素类型转换成x的元素类型
+        # float32-->float16
+        att_H = att_H.to(x.dtype)
+        att_W = att_W.to(x.dtype)
+
         out_H = torch.bmm(proj_value_H, att_H.permute(0, 2, 1)).view(m_batchsize, width, -1, height).permute(0, 2, 3, 1)
         out_W = torch.bmm(proj_value_W, att_W.permute(0, 2, 1)).view(m_batchsize, height, -1, width).permute(0, 2, 1, 3)
         # print(out_H.size(),out_W.size())
